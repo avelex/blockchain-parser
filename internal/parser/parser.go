@@ -24,8 +24,8 @@ type Parser interface {
 }
 
 type BlockchainParser struct {
-	subMu      *sync.RWMutex
-	subscriber map[string]struct{}
+	subMu       *sync.RWMutex
+	subscribers map[string]struct{}
 
 	currentBlock atomic.Int64
 
@@ -37,7 +37,7 @@ type BlockchainParser struct {
 func New(conf config.Config, client *ethclient.Client, repo repository.Repository) *BlockchainParser {
 	return &BlockchainParser{
 		subMu:        &sync.RWMutex{},
-		subscriber:   make(map[string]struct{}),
+		subscribers:  make(map[string]struct{}),
 		currentBlock: atomic.Int64{},
 		conf:         conf,
 		client:       client,
@@ -55,11 +55,11 @@ func (p *BlockchainParser) Subscribe(address string) bool {
 	p.subMu.Lock()
 	defer p.subMu.Unlock()
 
-	if _, ok := p.subscriber[address]; ok {
+	if _, ok := p.subscribers[address]; ok {
 		return false
 	}
 
-	p.subscriber[address] = struct{}{}
+	p.subscribers[address] = struct{}{}
 
 	return true
 }
@@ -156,14 +156,12 @@ func (p *BlockchainParser) processBlocks(ctx context.Context, sub <-chan int) {
 			continue
 		}
 
-		txChan := make(chan string, 2)
+		txChan := make(chan string, 5)
 		result := make(chan *ethclient.TransactionReceipt, 1)
 
-		go func() {
-			for i := 0; i < cap(txChan); i++ {
-				go p.processTransactions(ctx, txChan, result)
-			}
-		}()
+		for i := 0; i < cap(txChan); i++ {
+			go p.processTransactions(ctx, txChan, result)
+		}
 
 		go func() {
 			for _, tx := range bh.Transactions {
@@ -171,7 +169,7 @@ func (p *BlockchainParser) processBlocks(ctx context.Context, sub <-chan int) {
 			}
 		}()
 
-		subTx := make(map[string][]types.Transaction)
+		subTx := make(map[string][]types.Transaction, len(bh.Transactions))
 
 		for i := 0; i < len(bh.Transactions); i++ {
 			receipt := <-result
@@ -184,7 +182,9 @@ func (p *BlockchainParser) processBlocks(ctx context.Context, sub <-chan int) {
 
 			if p.subscriberExists(receipt.From) {
 				subTx[receipt.From] = append(subTx[receipt.From], tx)
-			} else if p.subscriberExists(receipt.To) {
+			}
+
+			if p.subscriberExists(receipt.To) {
 				subTx[receipt.To] = append(subTx[receipt.To], tx)
 			}
 		}
@@ -221,7 +221,7 @@ func (p *BlockchainParser) subscriberExists(address string) bool {
 	p.subMu.RLock()
 	defer p.subMu.RUnlock()
 
-	_, ok := p.subscriber[address]
+	_, ok := p.subscribers[address]
 
 	return ok
 }
